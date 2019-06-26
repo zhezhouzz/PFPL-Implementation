@@ -1,5 +1,12 @@
 fun pLn s = print (s ^ "\n");
-
+val counter = ref 0
+fun newSym () =
+    let
+        val ret = "tmp" ^ (Int.toString (!counter))
+        val _ = counter := ((!counter) + 1)
+    in
+        ret
+    end
 signature TY =
 sig
     datatype t = Empty
@@ -23,20 +30,6 @@ datatype t = Empty
            | Sum of t * t
            | Recursive of string * t
            | AnyTy
-fun eq (t1, t2) =
-    case (t1, t2) of
-        (Empty, Empty) => true
-      | (Unit, Unit) => true
-      | (TyV x, TyV x') => x = x'
-      | (Pf (t11, t12), Pf (t21, t22)) =>
-        (eq (t11, t21)) andalso (eq (t12, t22))
-      | (Sum (t11, t12), Sum (t21, t22)) =>
-        (eq (t11, t21)) andalso (eq (t12, t22))
-      | (Recursive (x, t), Recursive (x', t')) =>
-        (x = x') andalso (eq (t, t'))
-      | (AnyTy, _) => true
-      | (_, AnyTy) => true
-      | _ => false
 fun layout Empty = "0"
   | layout Unit = "1"
   | layout (TyV x) = x
@@ -54,6 +47,24 @@ fun subst (body, x, v) =
       | TyV y => if x = y then v else TyV y
       | Recursive (y, body) =>
         if x = y then Recursive (y, body) else Recursive (y, subst (body, x, v))
+fun eq (t1, t2) =
+    case (t1, t2) of
+        (Empty, Empty) => true
+      | (Unit, Unit) => true
+      | (TyV x, TyV x') => x = x'
+      | (Pf (t11, t12), Pf (t21, t22)) =>
+        (eq (t11, t21)) andalso (eq (t12, t22))
+      | (Sum (t11, t12), Sum (t21, t22)) =>
+        (eq (t11, t21)) andalso (eq (t12, t22))
+      | (Recursive (x, t), Recursive (x', t')) =>
+        let
+            val tmp = newSym ()
+        in
+            (eq (subst (t, x, TyV tmp), subst (t', x, TyV tmp)))
+        end
+      | (AnyTy, _) => true
+      | (_, AnyTy) => true
+      | _ => false
 end
 
 signature E =
@@ -163,7 +174,7 @@ fun subst (body, x, v) =
         then
             Lam (t, x, e)
         else
-            Lam (t, x, subst (e, x, v))
+            Lam (t, x', subst (e, x, v))
       | Ap (e1, e2) => Ap (subst (e1, x, v), subst (e2, x, v))
 end
 
@@ -243,7 +254,7 @@ fun static (gamma, e) =
         (case (static (gamma, e1), static (gamma, e2))of
              (Exact (Ty.Pf (t1, t2)), Exact t1') =>
              if Ty.eq (t1, t1') then Exact t2 else NoTy
-          | _ => NoTy
+           | _ => NoTy
         )
 fun eval e =
     let
@@ -317,7 +328,7 @@ fun smallstep e =
         case step e of
             Done v =>  pLn ">>>> done <<<<"
           | Computation e => smallstep e
-          (* | _ => raise Fail "Runtime Error" *)
+                                       (* | _ => raise Fail "Runtime Error" *)
     end
 
 end
@@ -332,17 +343,33 @@ fun succ n = Fold ("t", Ty.Sum (Ty.Unit, Ty.TyV "t"), In2 n)
 val one = succ zero
 val two = succ one
 val three = succ two
-val counter = ref 0
 val Nat = Ty.Recursive ("t", Ty.Sum (Ty.Unit, Ty.TyV "t"))
-fun newSym () =
-    let
-        val ret = "tmp" ^ (Int.toString (!counter))
-        val _ = counter := ((!counter) + 1)
-    in
-        ret
-    end
 fun ifz (e1, e2, x, e3) =
     Cases (Unfold e1, x, e2, e3)
+
+fun selfty t =
+    let
+        val tmp = newSym ()
+    in
+        Ty.Recursive (tmp, Ty.Pf (Ty.TyV tmp,t))
+    end
+
+fun self (t, x, e) =
+    let
+        val recFuncTy = newSym ()
+    in
+        Fold(recFuncTy, Ty.Pf (Ty.TyV recFuncTy, t),
+             Lam(Ty.Recursive (recFuncTy, Ty.Pf (Ty.TyV recFuncTy, t)), x,
+                 e
+                )
+            )
+    end
+
+fun unroll selfFunc =
+    Ap(Unfold(selfFunc), selfFunc)
+
+fun selfap (selfFunc, e) =
+    Ap(unroll selfFunc, e)
 end
 
 open E;
@@ -358,7 +385,20 @@ let
     val exp1 = ifz (one, two, "x", one)
     val fun1 = Lam (Nat, "z0", ifz (V "z0", two, "z1", V "z1"))
     val exp2 = Ap (fun1, exp1)
-    val _ = Dynamic.smallstep exp2
+    val fun2 = self (Ty.Pf (Nat, Nat), "Yf",
+                     Lam(Nat, "x",
+                         ifz(V "x", zero, "y", selfap(V "Yf", V "y"))
+                        )
+                    )
+    (* val fun2 = self (Ty.Pf (Nat, Nat), "Yf", *)
+    (*                  Lam(Nat, "x", *)
+    (*                      zero *)
+    (*                     ) *)
+    (*                 ) *)
+    (* val _ = pLn (Static.eval fun2) *)
+    val exp3 = selfap (fun2, three)
+    (* val _ = Dynamic.smallstep exp2 *)
+    val _ = Dynamic.smallstep exp3
 in
     ()
 end;;
